@@ -10,3 +10,5 @@ files:
       - package.json
       - app
 publish: null
+extraMetadata:
+  main: app/background.js

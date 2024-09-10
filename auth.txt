@@ -1,0 +1,718 @@
+ATTENDANCE HR DESKTOP
+├── dist
+├── main
+│   ├── helpers
+│   │   ├── create-window.ts
+│   │   ├── index.ts
+│   │   ├── background.ts
+│   │   ├── preload.ts
+│   ├── node_modules
+├── renderer
+│   ├── .next
+│   ├── components
+│   │   ├── ui
+│   │   │   ├── AttendanceHistory.tsx
+│   │   │   ├── ClockInOut.tsx
+│   │   │   ├── Dashboard.tsx
+│   │   │   ├── ScheduleViewer.tsx
+│   │   │   ├── TimeOffRequest.tsx
+│   ├── pages
+│   │   ├── _app.tsx
+│   │   ├── home.tsx
+│   │   ├── next.tsx
+│   ├── public
+│   ├── styles
+│   │   ├── globals.css
+│   ├── next-env.d.ts
+│   ├── next.config.js
+│   ├── postcss.config.js
+│   ├── preload.d.ts
+│   ├── tailwind.config.js
+│   ├── tsconfig.json
+├── resources
+│   ├── icon.icns
+│   ├── icon.ico
+├── .gitattributes
+├── .gitignore
+├── auth.txt
+├── electron-builder.yml
+├── package.json
+├── README.md
+├── stracture.txt
+├── tsconfig.json
+├── yarn.lock
+
+
+
+ATTENDANCE HR DESKTOP
+├── dist
+├── main
+│   ├── helpers
+│   │   ├── create-window.ts
+import {
+  screen,
+  BrowserWindow,
+  BrowserWindowConstructorOptions,
+  Rectangle,
+} from 'electron'
+import Store from 'electron-store'
+
+export const createWindow = (
+  windowName: string,
+  options: BrowserWindowConstructorOptions
+): BrowserWindow => {
+  const key = 'window-state'
+  const name = `window-state-${windowName}`
+  const store = new Store<Rectangle>({ name })
+  const defaultSize = {
+    width: options.width,
+    height: options.height,
+  }
+  let state = {}
+
+  const restore = () => store.get(key, defaultSize)
+
+  const getCurrentPosition = () => {
+    const position = win.getPosition()
+    const size = win.getSize()
+    return {
+      x: position[0],
+      y: position[1],
+      width: size[0],
+      height: size[1],
+    }
+  }
+
+  const windowWithinBounds = (windowState, bounds) => {
+    return (
+      windowState.x >= bounds.x &&
+      windowState.y >= bounds.y &&
+      windowState.x + windowState.width <= bounds.x + bounds.width &&
+      windowState.y + windowState.height <= bounds.y + bounds.height
+    )
+  }
+
+  const resetToDefaults = () => {
+    const bounds = screen.getPrimaryDisplay().bounds
+    return Object.assign({}, defaultSize, {
+      x: (bounds.width - defaultSize.width) / 2,
+      y: (bounds.height - defaultSize.height) / 2,
+    })
+  }
+
+  const ensureVisibleOnSomeDisplay = (windowState) => {
+    const visible = screen.getAllDisplays().some((display) => {
+      return windowWithinBounds(windowState, display.bounds)
+    })
+    if (!visible) {
+      // Window is partially or fully not visible now.
+      // Reset it to safe defaults.
+      return resetToDefaults()
+    }
+    return windowState
+  }
+
+  const saveState = () => {
+    if (!win.isMinimized() && !win.isMaximized()) {
+      Object.assign(state, getCurrentPosition())
+    }
+    store.set(key, state)
+  }
+
+  state = ensureVisibleOnSomeDisplay(restore())
+
+  const win = new BrowserWindow({
+    ...state,
+    ...options,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      ...options.webPreferences,
+    },
+  })
+
+  win.on('close', saveState)
+
+  return win
+}
+
+│   │   ├── index.ts
+export * from './create-window'
+
+│   │   ├── background.ts
+import path from 'path'
+import { app, ipcMain } from 'electron'
+import serve from 'electron-serve'
+import { createWindow } from './helpers'
+
+const isProd = process.env.NODE_ENV === 'production'
+
+if (isProd) {
+  serve({ directory: 'app' })
+} else {
+  app.setPath('userData', `${app.getPath('userData')} (development)`)
+}
+
+;(async () => {
+  await app.whenReady()
+
+  const mainWindow = createWindow('main', {
+    width: 1000,
+    height: 600,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+    },
+  })
+
+  if (isProd) {
+    await mainWindow.loadURL('app://./home')
+  } else {
+    const port = process.argv[2]
+    await mainWindow.loadURL(`http://localhost:${port}/home`)
+    mainWindow.webContents.openDevTools()
+  }
+})()
+
+app.on('window-all-closed', () => {
+  app.quit()
+})
+
+ipcMain.on('message', async (event, arg) => {
+  event.reply('message', `${arg} World!`)
+})
+
+│   │   ├── preload.ts
+import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron'
+
+const handler = {
+  send(channel: string, value: unknown) {
+    ipcRenderer.send(channel, value)
+  },
+  on(channel: string, callback: (...args: unknown[]) => void) {
+    const subscription = (_event: IpcRendererEvent, ...args: unknown[]) =>
+      callback(...args)
+    ipcRenderer.on(channel, subscription)
+
+    return () => {
+      ipcRenderer.removeListener(channel, subscription)
+    }
+  },
+}
+
+contextBridge.exposeInMainWorld('ipc', handler)
+
+export type IpcHandler = typeof handler
+
+│   ├── node_modules
+├── renderer
+│   ├── .next
+│   ├── components
+│   │   ├── ui
+│   │   │   ├── AttendanceHistory.tsx
+import { Table } from "./ui/table"
+
+const mockAttendanceData = [
+  { date: '2024-03-01', clockIn: '09:00 AM', clockOut: '05:00 PM' },
+  { date: '2024-03-02', clockIn: '08:55 AM', clockOut: '05:05 PM' },
+  { date: '2024-03-03', clockIn: '09:02 AM', clockOut: '04:58 PM' },
+]
+
+export default function AttendanceHistory() {
+  return (
+    <Table
+      headers={['Date', 'Clock In', 'Clock Out']}
+      rows={mockAttendanceData.map(record => [record.date, record.clockIn, record.clockOut])}
+    />
+  )
+}
+│   │   │   ├── ClockInOut.tsx
+import { useState, useEffect } from 'react'
+import { Button } from "./ui/button"
+import { Clock } from 'lucide-react'
+
+export default function ClockInOut() {
+  const [isClockedIn, setIsClockedIn] = useState(false)
+  const [currentTime, setCurrentTime] = useState(new Date())
+
+  useEffect(() => {
+    const timer = setInterval(() => setCurrentTime(new Date()), 1000)
+    return () => clearInterval(timer)
+  }, [])
+
+  const handleClockInOut = () => {
+    setIsClockedIn(!isClockedIn)
+  }
+
+  return (
+    <div className="flex flex-col items-center">
+      <p className="text-2xl font-bold mb-4">{currentTime.toLocaleTimeString()}</p>
+      <Button
+        onClick={handleClockInOut}
+        variant={isClockedIn ? "destructive" : "default"}
+      >
+        <Clock className="mr-2 h-4 w-4" />
+        {isClockedIn ? 'Clock Out' : 'Clock In'}
+      </Button>
+    </div>
+  )
+}
+│   │   │   ├── Dashboard.tsx
+import React from 'react'
+import { Table } from "./ui/table"
+
+const mockAttendanceData = [
+  { date: '2024-03-01', clockIn: '09:00 AM', clockOut: '05:00 PM' },
+  { date: '2024-03-02', clockIn: '08:55 AM', clockOut: '05:05 PM' },
+  { date: '2024-03-03', clockIn: '09:02 AM', clockOut: '04:58 PM' },
+]
+
+export default function AttendanceHistory() {
+  const headers = ['Date', 'Clock In', 'Clock Out']
+  const rows = mockAttendanceData.map(record => [
+    record.date,
+    record.clockIn,
+    record.clockOut
+  ])
+
+  return (
+    <Table headers={headers} rows={rows} />
+  )
+}
+│   │   │   ├── ScheduleViewer.tsx
+import { Table } from "./ui/table"
+
+const mockScheduleData = [
+  { time: '09:00 AM - 10:30 AM', task: 'Team Meeting' },
+  { time: '11:00 AM - 12:30 PM', task: 'Project Work' },
+  { time: '02:00 PM - 03:30 PM', task: 'Client Call' },
+  { time: '04:00 PM - 05:00 PM', task: 'Documentation' },
+]
+
+export default function ScheduleViewer() {
+  return (
+    <Table
+      headers={['Time', 'Task']}
+      rows={mockScheduleData.map(item => [item.time, item.task])}
+    />
+  )
+}
+│   │   │   ├── TimeOffRequest.tsx
+import { useState } from 'react'
+import { Button } from "./ui/button"
+import { Input } from "./ui/input"
+import { Label } from "./ui/label"
+import { Select } from "./ui/select"
+
+export default function TimeOffRequest() {
+  const [startDate, setStartDate] = useState('')
+  const [endDate, setEndDate] = useState('')
+  const [reason, setReason] = useState('')
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    console.log('Time off request submitted:', { startDate, endDate, reason })
+  }
+
+  const reasonOptions = [
+    { value: "vacation", label: "Vacation" },
+    { value: "sick", label: "Sick Leave" },
+    { value: "personal", label: "Personal" },
+    { value: "other", label: "Other" },
+  ]
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-4">
+      <div>
+        <Label htmlFor="start-date">Start Date</Label>
+        <Input
+          id="start-date"
+          type="date"
+          value={startDate}
+          onChange={(e) => setStartDate(e.target.value)}
+          required
+        />
+      </div>
+      <div>
+        <Label htmlFor="end-date">End Date</Label>
+        <Input
+          id="end-date"
+          type="date"
+          value={endDate}
+          onChange={(e) => setEndDate(e.target.value)}
+          required
+        />
+      </div>
+      <div>
+        <Label htmlFor="reason">Reason</Label>
+        <Select
+          options={reasonOptions}
+          value={reason}
+          onChange={setReason}
+          placeholder="Select reason"
+        />
+      </div>
+      <Button type="submit">Submit Request</Button>
+    </form>
+  )
+}
+│   ├── pages
+│   │   ├── _app.tsx
+import React from 'react'
+import type { AppProps } from 'next/app'
+
+import '../styles/globals.css'
+
+function MyApp({ Component, pageProps }: AppProps) {
+  return <Component {...pageProps} />
+}
+
+export default MyApp
+
+│   │   ├── home.tsx
+import Image from 'next/image'
+import Link from 'next/link'
+import { Button } from "./../components/ui/button"
+import { Clock, Calendar, UserCheck, FileText } from 'lucide-react'
+
+const features = [
+  {
+    name: 'Clock In/Out',
+    Icon: Clock,
+    description: 'Easily record your daily attendance with our simple clock in/out system.',
+    link: '/clock-in-out'
+  },
+  {
+    name: 'View Schedule',
+    Icon: Calendar,
+    description: 'Check your work schedule and plan your week efficiently.',
+    link: '/schedule'
+  },
+  {
+    name: 'Attendance History',
+    Icon: UserCheck,
+    description: 'Review your past attendance records and track your performance.',
+    link: '/attendance-history'
+  },
+  {
+    name: 'Request Time Off',
+    Icon: FileText,
+    description: 'Submit and manage your time off requests seamlessly.',
+    link: '/time-off-request'
+  },
+]
+
+export default function HomePage() {
+  return (
+    <div className="min-h-screen bg-gray-900 text-white">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className='py-20 mx-auto text-center flex flex-col items-center max-w-3xl'>
+          <Image
+            src="/images/logo.png"
+            alt="PAR Solution Logo"
+            width={200}
+            height={67}
+            className="mb-8"
+          />
+          <div className="bg-gray-800 p-8 rounded-lg shadow-lg">
+            <h1 className='text-4xl font-bold tracking-tight text-white sm:text-6xl'>
+              Welcome to {' '}
+              <span className='text-blue-400'>
+                PAR Solution
+              </span>
+              {' '}Attendance Tracker
+            </h1>
+            <p className='mt-6 text-lg max-w-prose text-gray-300'>
+              Manage your attendance, view schedules, and access important work information all in one place. Designed exclusively for PAR Solution employees.
+            </p>
+            <div className='flex flex-col sm:flex-row gap-4 mt-6 justify-center'>
+              <Link href='/dashboard'>
+                <Button size="lg" className="bg-blue-600 hover:bg-blue-700 text-white">Employee Dashboard</Button>
+              </Link>
+              <Button variant='outline' size="lg" className="text-gray-300 border-gray-300 hover:bg-gray-700">
+                View Attendance Policy
+              </Button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <section className='border-t border-gray-700 bg-gray-800'>
+        <div className='max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-20'>
+          <div className='grid grid-cols-1 gap-y-12 sm:grid-cols-2 sm:gap-x-6 lg:grid-cols-4 lg:gap-x-8 lg:gap-y-0'>
+            {features.map((feature) => (
+              <Link href={feature.link} key={feature.name}>
+                <div className='text-center md:flex md:items-start md:text-left lg:block lg:text-center cursor-pointer hover:bg-gray-700 p-4 rounded-lg transition-colors duration-200'>
+                  <div className='md:flex-shrink-0 flex justify-center'>
+                    <div className='h-16 w-16 flex items-center justify-center rounded-full bg-blue-900 text-blue-100'>
+                      <feature.Icon className='w-1/3 h-1/3' />
+                    </div>
+                  </div>
+
+                  <div className='mt-6 md:ml-4 md:mt-0 lg:ml-0 lg:mt-6'>
+                    <h3 className='text-lg font-medium text-gray-100'>
+                      {feature.name}
+                    </h3>
+                    <p className='mt-3 text-sm text-gray-400'>
+                      {feature.description}
+                    </p>
+                  </div>
+                </div>
+              </Link>
+            ))}
+          </div>
+        </div>
+      </section>
+    </div>
+  )
+}
+│   │   ├── next.tsx
+import Image from 'next/image'
+import Link from 'next/link'
+import { Button } from "./../components/ui/button"
+import { Clock, Calendar, UserCheck, FileText } from 'lucide-react'
+
+const features = [
+  {
+    name: 'Clock In/Out',
+    Icon: Clock,
+    description: 'Easily record your daily attendance with our simple clock in/out system.',
+  },
+  {
+    name: 'View Schedule',
+    Icon: Calendar,
+    description: 'Check your work schedule and plan your week efficiently.',
+  },
+  {
+    name: 'Attendance History',
+    Icon: UserCheck,
+    description: 'Review your past attendance records and track your performance.',
+  },
+  {
+    name: 'Request Time Off',
+    Icon: FileText,
+    description: 'Submit and manage your time off requests seamlessly.',
+  },
+]
+
+export default function HomePage() {
+  return (
+    <div className="min-h-screen bg-gray-100 dark:bg-gray-900">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className='py-20 mx-auto text-center flex flex-col items-center max-w-3xl'>
+          <Image
+            src="/images/logo.png"
+            alt="PAR Solution Logo"
+            width={200}
+            height={67}
+            className="mb-8 dark:invert"
+          />
+          <h1 className='text-4xl font-bold tracking-tight text-gray-900 dark:text-white sm:text-6xl'>
+            Welcome to {' '}
+            <span className='text-blue-600 dark:text-blue-400'>
+              PAR Solution
+            </span>
+            {' '}Attendance Tracker
+          </h1>
+          <p className='mt-6 text-lg max-w-prose text-muted-foreground dark:text-gray-300'>
+            Manage your attendance, view schedules, and access important work information all in one place. Designed exclusively for PAR Solution employees.
+          </p>
+          <div className='flex flex-col sm:flex-row gap-4 mt-6'>
+            <Link href='/dashboard'>
+              <Button size="lg" className="w-full sm:w-auto">Employee Dashboard</Button>
+            </Link>
+            <Button variant='outline' size="lg" className="w-full sm:w-auto">
+              View Attendance Policy
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      <section className='border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800'>
+        <div className='max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-20'>
+          <div className='grid grid-cols-1 gap-y-12 sm:grid-cols-2 sm:gap-x-6 lg:grid-cols-4 lg:gap-x-8 lg:gap-y-0'>
+            {features.map((feature) => (
+              <div
+                key={feature.name}
+                className='text-center md:flex md:items-start md:text-left lg:block lg:text-center'>
+                <div className='md:flex-shrink-0 flex justify-center'>
+                  <div className='h-16 w-16 flex items-center justify-center rounded-full bg-blue-100 dark:bg-blue-900 text-blue-900 dark:text-blue-100'>
+                    <feature.Icon className='w-1/3 h-1/3' />
+                  </div>
+                </div>
+
+                <div className='mt-6 md:ml-4 md:mt-0 lg:ml-0 lg:mt-6'>
+                  <h3 className='text-base font-medium text-gray-900 dark:text-white'>
+                    {feature.name}
+                  </h3>
+                  <p className='mt-3 text-sm text-muted-foreground dark:text-gray-400'>
+                    {feature.description}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+    </div>
+  )
+}
+│   ├── public
+│   ├── styles
+│   │   ├── globals.css
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-gray-900 text-white;
+  }
+}
+
+@layer components {
+  .btn-blue {
+    @apply text-white font-bold px-4 py-2 rounded bg-blue-600 hover:bg-blue-500;
+  }
+}
+
+│   ├── next-env.d.ts
+│   ├── next.config.js
+/** @type {import('next').NextConfig} */
+module.exports = {
+  output: 'export',
+  distDir: process.env.NODE_ENV === 'production' ? '../app' : '.next',
+  trailingSlash: true,
+  images: {
+    unoptimized: true,
+  },
+  webpack: (config) => {
+    return config
+  },
+}
+
+│   ├── postcss.config.js
+module.exports = {
+  plugins: {
+    tailwindcss: {
+      config: './renderer/tailwind.config.js',
+    },
+    autoprefixer: {},
+  },
+}
+
+│   ├── preload.d.ts
+import { IpcHandler } from '../main/preload'
+
+declare global {
+  interface Window {
+    ipc: IpcHandler
+  }
+}
+
+│   ├── tailwind.config.js
+const colors = require('tailwindcss/colors')
+
+module.exports = {
+  content: [
+    './renderer/pages/**/*.{js,ts,jsx,tsx}',
+    './renderer/components/**/*.{js,ts,jsx,tsx}',
+  ],
+  theme: {
+    colors: {
+      // use colors only specified
+      white: colors.white,
+      gray: colors.gray,
+      blue: colors.blue,
+    },
+    extend: {},
+  },
+  plugins: [],
+}
+
+│   ├── tsconfig.json
+{
+  "extends": "../tsconfig.json",
+  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx"],
+  "exclude": ["node_modules"]
+}
+
+├── resources
+│   ├── icon.icns
+│   ├── icon.ico
+├── .gitattributes
+├── .gitignore
+├── electron-builder.yml
+appId: com.example.nextron
+productName: Attendance App
+copyright: Copyright © 2024 S R Jay
+directories:
+  output: dist
+  buildResources: resources
+files:
+  - from: .
+    filter:
+      - package.json
+      - app
+publish: null
+
+├── package.json
+{
+  "private": true,
+  "name": "par-attendance-app",
+  "description": "PAR Solution Attendance Tracker",
+  "version": "1.0.0",
+  "author": "S R Jay Kikani <srjaykikani@gmail.com>",
+  "main": "app/background.js",
+  "scripts": {
+    "dev": "nextron",
+    "build": "nextron build",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "dependencies": {
+    "@radix-ui/react-slot": "^1.1.0",
+    "class-variance-authority": "^0.7.0",
+    "clsx": "^2.1.1",
+    "electron-serve": "^1.3.0",
+    "electron-store": "^8.2.0",
+    "lucide-react": "^0.439.0",
+    "tailwind-merge": "^2.5.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.16",
+    "@types/react": "^18.2.52",
+    "autoprefixer": "^10.4.19",
+    "electron": "^31.0.1",
+    "electron-builder": "^24.13.3",
+    "next": "^14.2.4",
+    "nextron": "^9.1.0",
+    "postcss": "^8.4.38",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tailwindcss": "^3.4.3",
+    "typescript": "^5.4.5"
+  }
+}
+
+├── README.md
+├── tsconfig.json
+{
+  "compilerOptions": {
+    "target": "es5",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "allowJs": true,
+    "skipLibCheck": true,
+    "strict": false,
+    "forceConsistentCasingInFileNames": true,
+    "noEmit": true,
+    "incremental": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "node",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "preserve"
+  },
+  "exclude": ["node_modules", "renderer/next.config.js", "app", "dist"]
+}
+
+├── yarn.lock
