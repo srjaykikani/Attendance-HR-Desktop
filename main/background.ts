@@ -1,4 +1,4 @@
-import { app, ipcMain, BrowserWindow } from 'electron';
+import { app, ipcMain, BrowserWindow, session } from 'electron';
 import serve from 'electron-serve';
 import Store from 'electron-store';
 import path from 'path';
@@ -33,7 +33,19 @@ const createWindow = async () => {
     const port = process.argv[2];
     await mainWindow.loadURL(`http://localhost:${port}/home`);
     mainWindow.webContents.openDevTools();
+    
+    // Clear DevTools-related data
+    await session.defaultSession.clearStorageData({
+      storages: ['filesystem', 'indexdb', 'localstorage', 'shadercache', 'websql', 'serviceworkers', 'cachestorage']
+    });
   }
+
+  // Disable Autofill
+  mainWindow.webContents.on('did-finish-load', () => {
+    mainWindow?.webContents.executeJavaScript(`
+      navigator.credentials.preventSilentAccess();
+    `);
+  });
 
   mainWindow.on('closed', () => {
     mainWindow = null;
