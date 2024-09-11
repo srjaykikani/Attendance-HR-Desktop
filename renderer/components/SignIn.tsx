@@ -3,12 +3,16 @@ import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 
-export default function SignIn() {
+interface SignInProps {
+  onSignIn: (email: string, password: string) => Promise<void>;
+}
+
+export default function SignIn({ onSignIn }: SignInProps) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
 
-  const handleSignIn = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
 
@@ -18,14 +22,7 @@ export default function SignIn() {
     }
 
     try {
-      const response = await window.ipc.invoke('sign-in', { email, password });
-      if (response.success) {
-        // Navigate to the main app screen or dashboard
-        console.log('Sign in successful');
-        // You can add navigation logic here
-      } else {
-        setError(response.error || 'Invalid credentials');
-      }
+      await onSignIn(email, password);
     } catch (error) {
       setError('An error occurred. Please try again.');
     }
@@ -35,7 +32,7 @@ export default function SignIn() {
     <div className="flex items-center justify-center min-h-screen bg-gray-100">
       <div className="px-8 py-6 mt-4 text-left bg-white shadow-lg">
         <h3 className="text-2xl font-bold text-center">Sign in to your account</h3>
-        <form onSubmit={handleSignIn}>
+        <form onSubmit={handleSubmit}>
           <div className="mt-4">
             <Label htmlFor="email">Email</Label>
             <Input

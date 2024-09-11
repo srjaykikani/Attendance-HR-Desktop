@@ -40,8 +40,7 @@ const createWindow = async () => {
   });
 };
 
-// Replace with your Payload CMS URL
-const PAYLOAD_CMS_URL = 'http://localhost:3000/admin'; // Update this with your actual Payload CMS URL
+const PAYLOAD_CMS_URL = process.env.NEXT_PUBLIC_SERVER_URL || 'http://localhost:3000';
 
 app.on('ready', createWindow);
 
@@ -62,14 +61,9 @@ ipcMain.handle('sign-in', async (_, { email, password }) => {
     const response = await axios.post(`${PAYLOAD_CMS_URL}/api/users/login`, {
       email,
       password,
-    }, {
-      headers: {
-        'Content-Type': 'application/json',
-      },
     });
     
     if (response.data && response.data.user) {
-      // Store the token securely
       await store.set('auth-token', response.data.token);
       return { success: true, user: response.data.user };
     } else {
@@ -80,7 +74,7 @@ ipcMain.handle('sign-in', async (_, { email, password }) => {
     if (axios.isAxiosError(error) && error.response) {
       return { 
         success: false, 
-        error: error.response.data?.errors?.[0]?.message || 'An error occurred during sign-in'
+        error: error.response.data?.message || 'An error occurred during sign-in'
       };
     }
     return { success: false, error: 'An error occurred during sign-in' };
@@ -105,7 +99,7 @@ ipcMain.handle('check-auth', async () => {
   try {
     const response = await axios.get(`${PAYLOAD_CMS_URL}/api/users/me`, {
       headers: {
-        Authorization: `Bearer ${token}`,
+        Authorization: `JWT ${token}`,
       },
     });
 
@@ -119,5 +113,29 @@ ipcMain.handle('check-auth', async () => {
     console.error('Auth check error:', error);
     store.delete('auth-token');
     return { isAuthenticated: false };
+  }
+});
+
+ipcMain.handle('fetch-user-info', async (_, userId: string) => {
+  const token = store.get('auth-token');
+  if (!token) {
+    return { success: false, error: 'Not authenticated' };
+  }
+
+  try {
+    const response = await axios.get(`${PAYLOAD_CMS_URL}/api/users/${userId}`, {
+      headers: {
+        Authorization: `JWT ${token}`,
+      },
+    });
+
+    if (response.data && response.data.user) {
+      return { success: true, user: response.data.user };
+    } else {
+      throw new Error('Invalid response from server');
+    }
+  } catch (error) {
+    console.error('Error fetching user info:', error);
+    return { success: false, error: 'An error occurred while fetching user info' };
   }
 });

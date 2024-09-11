@@ -1,12 +1,22 @@
 ATTENDANCE HR DESKTOP
+│
+├── .vscode
+│
+├── app
+│
 ├── dist
+│
 ├── main
 │   ├── helpers
 │   │   ├── create-window.ts
 │   │   ├── index.ts
-│   │   ├── background.ts
-│   │   ├── preload.ts
-│   ├── node_modules
+│   │
+│   ├── background.ts
+│   ├── localStore.ts
+│   ├── preload.ts
+│
+├── node_modules
+│
 ├── renderer
 │   ├── .next
 │   ├── components
@@ -15,37 +25,60 @@ ATTENDANCE HR DESKTOP
 │   │   │   ├── ClockInOut.tsx
 │   │   │   ├── Dashboard.tsx
 │   │   │   ├── ScheduleViewer.tsx
+│   │   │   ├── SignIn.tsx
 │   │   │   ├── TimeOffRequest.tsx
+│   │
 │   ├── pages
 │   │   ├── _app.tsx
 │   │   ├── home.tsx
 │   │   ├── next.tsx
-│   ├── public
-│   ├── styles
-│   │   ├── globals.css
-│   ├── next-env.d.ts
-│   ├── next.config.js
-│   ├── postcss.config.js
-│   ├── preload.d.ts
-│   ├── tailwind.config.js
-│   ├── tsconfig.json
+│
+├── public
+│
+├── styles
+│   ├── globals.css
+│
+├── utils
+│   ├── offlineQueue.ts
+│   ├── sync.ts
+│
+├── next-env.d.ts
+├── next.config.js
+├── postcss.config.js
+├── preload.d.ts
+├── tailwind.config.js
+├── tsconfig.json
+│
 ├── resources
 │   ├── icon.icns
 │   ├── icon.ico
+│
 ├── .gitattributes
 ├── .gitignore
-├── auth.txt
 ├── electron-builder.yml
+├── package-lock.json
 ├── package.json
 ├── README.md
-├── stracture.txt
 ├── tsconfig.json
 ├── yarn.lock
 
 
 
+
+
+
+
+
+
+
 ATTENDANCE HR DESKTOP
+│
+├── .vscode
+│
+├── app
+│
 ├── dist
+│
 ├── main
 │   ├── helpers
 │   │   ├── create-window.ts
@@ -139,71 +172,142 @@ export const createWindow = (
 │   │   ├── index.ts
 export * from './create-window'
 
-│   │   ├── background.ts
-import path from 'path'
-import { app, ipcMain } from 'electron'
-import serve from 'electron-serve'
-import { createWindow } from './helpers'
+│   │
+│   ├── background.ts
+import { app, ipcMain, BrowserWindow } from 'electron';
+import serve from 'electron-serve';
+import Store from 'electron-store';
+import path from 'path';
+import axios from 'axios';
 
-const isProd = process.env.NODE_ENV === 'production'
+const isProd: boolean = process.env.NODE_ENV === 'production';
 
 if (isProd) {
-  serve({ directory: 'app' })
+  serve({ directory: 'app' });
 } else {
-  app.setPath('userData', `${app.getPath('userData')} (development)`)
+  app.setPath('userData', `${app.getPath('userData')} (development)`);
 }
 
-;(async () => {
-  await app.whenReady()
+const store = new Store();
 
-  const mainWindow = createWindow('main', {
+let mainWindow: BrowserWindow | null = null;
+
+const createWindow = async () => {
+  mainWindow = new BrowserWindow({
     width: 1000,
     height: 600,
     webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
       preload: path.join(__dirname, 'preload.js'),
     },
-  })
+  });
 
   if (isProd) {
-    await mainWindow.loadURL('app://./home')
+    await mainWindow.loadURL('app://./home');
   } else {
-    const port = process.argv[2]
-    await mainWindow.loadURL(`http://localhost:${port}/home`)
-    mainWindow.webContents.openDevTools()
+    const port = process.argv[2];
+    await mainWindow.loadURL(`http://localhost:${port}/home`);
+    mainWindow.webContents.openDevTools();
   }
-})()
+
+  mainWindow.on('closed', () => {
+    mainWindow = null;
+  });
+};
+
+// Replace with your Payload CMS URL
+const PAYLOAD_CMS_URL = 'http://localhost:3000/admin'; // Update this with your actual Payload CMS URL
+
+app.on('ready', createWindow);
 
 app.on('window-all-closed', () => {
-  app.quit()
-})
+  if (process.platform !== 'darwin') {
+    app.quit();
+  }
+});
 
-ipcMain.on('message', async (event, arg) => {
-  event.reply('message', `${arg} World!`)
-})
+app.on('activate', () => {
+  if (mainWindow === null) {
+    createWindow();
+  }
+});
 
-│   │   ├── preload.ts
-import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron'
-
-const handler = {
-  send(channel: string, value: unknown) {
-    ipcRenderer.send(channel, value)
-  },
-  on(channel: string, callback: (...args: unknown[]) => void) {
-    const subscription = (_event: IpcRendererEvent, ...args: unknown[]) =>
-      callback(...args)
-    ipcRenderer.on(channel, subscription)
-
-    return () => {
-      ipcRenderer.removeListener(channel, subscription)
+ipcMain.handle('sign-in', async (_, { email, password }) => {
+  try {
+    const response = await axios.post(`${PAYLOAD_CMS_URL}/api/users/login`, {
+      email,
+      password,
+    }, {
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+    
+    if (response.data && response.data.user) {
+      // Store the token securely
+      await store.set('auth-token', response.data.token);
+      return { success: true, user: response.data.user };
+    } else {
+      throw new Error('Invalid response from server');
     }
-  },
-}
+  } catch (error) {
+    console.error('Sign-in error:', error);
+    if (axios.isAxiosError(error) && error.response) {
+      return { 
+        success: false, 
+        error: error.response.data?.errors?.[0]?.message || 'An error occurred during sign-in'
+      };
+    }
+    return { success: false, error: 'An error occurred during sign-in' };
+  }
+});
 
-contextBridge.exposeInMainWorld('ipc', handler)
+ipcMain.handle('get-token', () => {
+  return store.get('auth-token');
+});
 
-export type IpcHandler = typeof handler
+ipcMain.handle('logout', () => {
+  store.delete('auth-token');
+  return { success: true };
+});
 
-│   ├── node_modules
+ipcMain.handle('check-auth', async () => {
+  const token = store.get('auth-token');
+  if (!token) {
+    return { isAuthenticated: false };
+  }
+
+  try {
+    const response = await axios.get(`${PAYLOAD_CMS_URL}/api/users/me`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    if (response.data && response.data.user) {
+      return { isAuthenticated: true, user: response.data.user };
+    } else {
+      store.delete('auth-token');
+      return { isAuthenticated: false };
+    }
+  } catch (error) {
+    console.error('Auth check error:', error);
+    store.delete('auth-token');
+    return { isAuthenticated: false };
+  }
+});
+│   ├── localStore.ts
+nothing
+│   ├── preload.ts
+import { contextBridge, ipcRenderer } from 'electron';
+
+contextBridge.exposeInMainWorld('ipc', {
+  invoke: (channel: string, data: any) => ipcRenderer.invoke(channel, data),
+});
+│
+├── node_modules
+│
 ├── renderer
 │   ├── .next
 │   ├── components
@@ -296,6 +400,76 @@ export default function ScheduleViewer() {
     />
   )
 }
+│   │   │   ├── SignIn.tsx
+import React, { useState } from 'react';
+import { Button } from "./ui/button";
+import { Input } from "./ui/input";
+import { Label } from "./ui/label";
+
+export default function SignIn() {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+
+  const handleSignIn = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+
+    if (!email || !password) {
+      setError('Email and password are required');
+      return;
+    }
+
+    try {
+      const response = await window.ipc.invoke('sign-in', { email, password });
+      if (response.success) {
+        // Navigate to the main app screen or dashboard
+        console.log('Sign in successful');
+        // You can add navigation logic here
+      } else {
+        setError(response.error || 'Invalid credentials');
+      }
+    } catch (error) {
+      setError('An error occurred. Please try again.');
+    }
+  };
+
+  return (
+    <div className="flex items-center justify-center min-h-screen bg-gray-100">
+      <div className="px-8 py-6 mt-4 text-left bg-white shadow-lg">
+        <h3 className="text-2xl font-bold text-center">Sign in to your account</h3>
+        <form onSubmit={handleSignIn}>
+          <div className="mt-4">
+            <Label htmlFor="email">Email</Label>
+            <Input
+              type="email"
+              placeholder="Email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="w-full px-4 py-2 mt-2 border rounded-md focus:outline-none focus:ring-1 focus:ring-blue-600"
+              required
+            />
+          </div>
+          <div className="mt-4">
+            <Label htmlFor="password">Password</Label>
+            <Input
+              type="password"
+              placeholder="Password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="w-full px-4 py-2 mt-2 border rounded-md focus:outline-none focus:ring-1 focus:ring-blue-600"
+              required
+            />
+          </div>
+          <div className="flex items-baseline justify-between">
+            <Button type="submit" className="px-6 py-2 mt-4 text-white bg-blue-600 rounded-lg hover:bg-blue-900">Sign In</Button>
+          </div>
+        </form>
+        {error && <p className="mt-4 text-xs text-red-500">{error}</p>}
+      </div>
+    </div>
+  );
+}
 │   │   │   ├── TimeOffRequest.tsx
 import { useState } from 'react'
 import { Button } from "./ui/button"
@@ -355,6 +529,7 @@ export default function TimeOffRequest() {
     </form>
   )
 }
+│   │
 │   ├── pages
 │   │   ├── _app.tsx
 import React from 'react'
@@ -369,101 +544,30 @@ function MyApp({ Component, pageProps }: AppProps) {
 export default MyApp
 
 │   │   ├── home.tsx
-import Image from 'next/image'
-import Link from 'next/link'
-import { Button } from "./../components/ui/button"
-import { Clock, Calendar, UserCheck, FileText } from 'lucide-react'
-
-const features = [
-  {
-    name: 'Clock In/Out',
-    Icon: Clock,
-    description: 'Easily record your daily attendance with our simple clock in/out system.',
-    link: '/clock-in-out'
-  },
-  {
-    name: 'View Schedule',
-    Icon: Calendar,
-    description: 'Check your work schedule and plan your week efficiently.',
-    link: '/schedule'
-  },
-  {
-    name: 'Attendance History',
-    Icon: UserCheck,
-    description: 'Review your past attendance records and track your performance.',
-    link: '/attendance-history'
-  },
-  {
-    name: 'Request Time Off',
-    Icon: FileText,
-    description: 'Submit and manage your time off requests seamlessly.',
-    link: '/time-off-request'
-  },
-]
+import React, { useState, useEffect } from 'react';
+import SignIn from '../components/SignIn';
 
 export default function HomePage() {
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+
+  useEffect(() => {
+    const checkAuth = async () => {
+      const token = await window.ipc.invoke('get-token');
+      setIsAuthenticated(!!token);
+    };
+    checkAuth();
+  }, []);
+
+  if (!isAuthenticated) {
+    return <SignIn />;
+  }
+
   return (
-    <div className="min-h-screen bg-gray-900 text-white">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className='py-20 mx-auto text-center flex flex-col items-center max-w-3xl'>
-          <Image
-            src="/images/logo.png"
-            alt="PAR Solution Logo"
-            width={200}
-            height={67}
-            className="mb-8"
-          />
-          <div className="bg-gray-800 p-8 rounded-lg shadow-lg">
-            <h1 className='text-4xl font-bold tracking-tight text-white sm:text-6xl'>
-              Welcome to {' '}
-              <span className='text-blue-400'>
-                PAR Solution
-              </span>
-              {' '}Attendance Tracker
-            </h1>
-            <p className='mt-6 text-lg max-w-prose text-gray-300'>
-              Manage your attendance, view schedules, and access important work information all in one place. Designed exclusively for PAR Solution employees.
-            </p>
-            <div className='flex flex-col sm:flex-row gap-4 mt-6 justify-center'>
-              <Link href='/dashboard'>
-                <Button size="lg" className="bg-blue-600 hover:bg-blue-700 text-white">Employee Dashboard</Button>
-              </Link>
-              <Button variant='outline' size="lg" className="text-gray-300 border-gray-300 hover:bg-gray-700">
-                View Attendance Policy
-              </Button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <section className='border-t border-gray-700 bg-gray-800'>
-        <div className='max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-20'>
-          <div className='grid grid-cols-1 gap-y-12 sm:grid-cols-2 sm:gap-x-6 lg:grid-cols-4 lg:gap-x-8 lg:gap-y-0'>
-            {features.map((feature) => (
-              <Link href={feature.link} key={feature.name}>
-                <div className='text-center md:flex md:items-start md:text-left lg:block lg:text-center cursor-pointer hover:bg-gray-700 p-4 rounded-lg transition-colors duration-200'>
-                  <div className='md:flex-shrink-0 flex justify-center'>
-                    <div className='h-16 w-16 flex items-center justify-center rounded-full bg-blue-900 text-blue-100'>
-                      <feature.Icon className='w-1/3 h-1/3' />
-                    </div>
-                  </div>
-
-                  <div className='mt-6 md:ml-4 md:mt-0 lg:ml-0 lg:mt-6'>
-                    <h3 className='text-lg font-medium text-gray-100'>
-                      {feature.name}
-                    </h3>
-                    <p className='mt-3 text-sm text-gray-400'>
-                      {feature.description}
-                    </p>
-                  </div>
-                </div>
-              </Link>
-            ))}
-          </div>
-        </div>
-      </section>
+    <div className="container mx-auto px-4 py-8">
+      <h1 className="text-2xl font-bold mb-4">Welcome to PAR Solution Attendance Tracker</h1>
+      <p>You are signed in. Implement your main app content here.</p>
     </div>
-  )
+  );
 }
 │   │   ├── next.tsx
 import Image from 'next/image'
@@ -556,16 +660,18 @@ export default function HomePage() {
     </div>
   )
 }
-│   ├── public
-│   ├── styles
-│   │   ├── globals.css
+│
+├── public
+│
+├── styles
+│   ├── globals.css
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
   body {
-    @apply bg-gray-900 text-white;
+    @apply bg-gray-900 text-blue-950;
   }
 }
 
@@ -575,8 +681,15 @@ export default function HomePage() {
   }
 }
 
-│   ├── next-env.d.ts
-│   ├── next.config.js
+│
+├── utils
+│   ├── offlineQueue.ts
+nothing
+│   ├── sync.ts
+nothing
+│
+├── next-env.d.ts
+├── next.config.js
 /** @type {import('next').NextConfig} */
 module.exports = {
   output: 'export',
@@ -590,7 +703,7 @@ module.exports = {
   },
 }
 
-│   ├── postcss.config.js
+├── postcss.config.js
 module.exports = {
   plugins: {
     tailwindcss: {
@@ -600,7 +713,7 @@ module.exports = {
   },
 }
 
-│   ├── preload.d.ts
+├── preload.d.ts
 import { IpcHandler } from '../main/preload'
 
 declare global {
@@ -609,7 +722,7 @@ declare global {
   }
 }
 
-│   ├── tailwind.config.js
+├── tailwind.config.js
 const colors = require('tailwindcss/colors')
 
 module.exports = {
@@ -629,16 +742,18 @@ module.exports = {
   plugins: [],
 }
 
-│   ├── tsconfig.json
+├── tsconfig.json
 {
   "extends": "../tsconfig.json",
   "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx"],
   "exclude": ["node_modules"]
 }
 
+│
 ├── resources
 │   ├── icon.icns
 │   ├── icon.ico
+│
 ├── .gitattributes
 ├── .gitignore
 ├── electron-builder.yml
@@ -654,6 +769,9 @@ files:
       - package.json
       - app
 publish: null
+extraMetadata:
+  main: app/background.js
+├── package-lock.json
 
 ├── package.json
 {
@@ -669,17 +787,25 @@ publish: null
     "postinstall": "electron-builder install-app-deps"
   },
   "dependencies": {
+    "@radix-ui/react-dialog": "^1.1.1",
+    "@radix-ui/react-label": "^2.1.0",
+    "@radix-ui/react-select": "^2.1.1",
+    "@radix-ui/react-separator": "^1.1.0",
     "@radix-ui/react-slot": "^1.1.0",
+    "axios": "^1.7.7",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",
+    "date-fns": "^3.6.0",
     "electron-serve": "^1.3.0",
     "electron-store": "^8.2.0",
     "lucide-react": "^0.439.0",
     "tailwind-merge": "^2.5.2"
   },
   "devDependencies": {
+    "@types/electron-store": "^3.2.0",
     "@types/node": "^20.11.16",
     "@types/react": "^18.2.52",
+    "@types/react-dom": "^18.3.0",
     "autoprefixer": "^10.4.19",
     "electron": "^31.0.1",
     "electron-builder": "^24.13.3",
@@ -697,22 +823,26 @@ publish: null
 ├── tsconfig.json
 {
   "compilerOptions": {
-    "target": "es5",
+    "target": "ES2018",
+    "module": "commonjs",
     "lib": ["dom", "dom.iterable", "esnext"],
     "allowJs": true,
     "skipLibCheck": true,
-    "strict": false,
+    "strict": true,
     "forceConsistentCasingInFileNames": true,
     "noEmit": true,
-    "incremental": true,
     "esModuleInterop": true,
-    "module": "esnext",
     "moduleResolution": "node",
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "jsx": "preserve"
+    "jsx": "preserve",
+    "incremental": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./*"]
+    }
   },
+  "include": ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx"],
   "exclude": ["node_modules", "renderer/next.config.js", "app", "dist"]
 }
-
 ├── yarn.lock
