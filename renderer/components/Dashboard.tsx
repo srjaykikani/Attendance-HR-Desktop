@@ -1,5 +1,6 @@
 import React from 'react';
 import { Button } from "./ui/button";
+import ActivityTracker from './ActivityTracker';
 // Define the User interface based on the structure from your Payload CMS
 interface User {
   id: string;
@@ -115,6 +116,9 @@ export default function Dashboard({ user, onSignOut }: DashboardProps) {
           <div className="max-w-7xl mx-auto sm:px-6 lg:px-8">
             <div className="px-4 py-8 sm:px-0">
               {renderUserInfo()}
+              <div className="mt-8">
+              <ActivityTracker />
+            </div>
             </div>
           </div>
         </main>

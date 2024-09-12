@@ -69,8 +69,6 @@ ATTENDANCE HR DESKTOP
 
 
 
-
-
 ATTENDANCE HR DESKTOP
 │
 ├── .vscode
@@ -174,7 +172,7 @@ export * from './create-window'
 
 │   │
 │   ├── background.ts
-import { app, ipcMain, BrowserWindow } from 'electron';
+import { app, ipcMain, BrowserWindow, session } from 'electron';
 import serve from 'electron-serve';
 import Store from 'electron-store';
 import path from 'path';
@@ -209,15 +207,26 @@ const createWindow = async () => {
     const port = process.argv[2];
     await mainWindow.loadURL(`http://localhost:${port}/home`);
     mainWindow.webContents.openDevTools();
+    
+    // Clear DevTools-related data
+    await session.defaultSession.clearStorageData({
+      storages: ['filesystem', 'indexdb', 'localstorage', 'shadercache', 'websql', 'serviceworkers', 'cachestorage']
+    });
   }
+
+  // Disable Autofill
+  mainWindow.webContents.on('did-finish-load', () => {
+    mainWindow?.webContents.executeJavaScript(`
+      navigator.credentials.preventSilentAccess();
+    `);
+  });
 
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
 };
 
-// Replace with your Payload CMS URL
-const PAYLOAD_CMS_URL = 'http://localhost:3000/admin'; // Update this with your actual Payload CMS URL
+const PAYLOAD_CMS_URL = process.env.NEXT_PUBLIC_SERVER_URL || 'http://localhost:3000';
 
 app.on('ready', createWindow);
 
@@ -238,14 +247,9 @@ ipcMain.handle('sign-in', async (_, { email, password }) => {
     const response = await axios.post(`${PAYLOAD_CMS_URL}/api/users/login`, {
       email,
       password,
-    }, {
-      headers: {
-        'Content-Type': 'application/json',
-      },
     });
     
     if (response.data && response.data.user) {
-      // Store the token securely
       await store.set('auth-token', response.data.token);
       return { success: true, user: response.data.user };
     } else {
@@ -256,7 +260,7 @@ ipcMain.handle('sign-in', async (_, { email, password }) => {
     if (axios.isAxiosError(error) && error.response) {
       return { 
         success: false, 
-        error: error.response.data?.errors?.[0]?.message || 'An error occurred during sign-in'
+        error: error.response.data?.message || 'An error occurred during sign-in'
       };
     }
     return { success: false, error: 'An error occurred during sign-in' };
@@ -281,7 +285,7 @@ ipcMain.handle('check-auth', async () => {
   try {
     const response = await axios.get(`${PAYLOAD_CMS_URL}/api/users/me`, {
       headers: {
-        Authorization: `Bearer ${token}`,
+        Authorization: `JWT ${token}`,
       },
     });
 
@@ -297,8 +301,32 @@ ipcMain.handle('check-auth', async () => {
     return { isAuthenticated: false };
   }
 });
+
+ipcMain.handle('fetch-user-info', async (_, userId: string) => {
+  const token = store.get('auth-token');
+  if (!token) {
+    return { success: false, error: 'Not authenticated' };
+  }
+
+  try {
+    const response = await axios.get(`${PAYLOAD_CMS_URL}/api/users/${userId}`, {
+      headers: {
+        Authorization: `JWT ${token}`,
+      },
+    });
+
+    if (response.data && response.data.user) {
+      return { success: true, user: response.data.user };
+    } else {
+      throw new Error('Invalid response from server');
+    }
+  } catch (error) {
+    console.error('Error fetching user info:', error);
+    return { success: false, error: 'An error occurred while fetching user info' };
+  }
+});
 │   ├── localStore.ts
-nothing
+
 │   ├── preload.ts
 import { contextBridge, ipcRenderer } from 'electron';
 
@@ -361,26 +389,129 @@ export default function ClockInOut() {
   )
 }
 │   │   │   ├── Dashboard.tsx
-import React from 'react'
-import { Table } from "./ui/table"
+import React from 'react';
+import { Button } from "./ui/button";
+// Define the User interface based on the structure from your Payload CMS
+interface User {
+  id: string;
+  email: string;
+  role: string;
+  department?: string;
+  manager?: string | { id: string; email: string };
+  managerLead?: string | { id: string; email: string };
+  salesLead?: string | { id: string; email: string };
+  ceo?: string | { id: string; email: string };
+}
 
-const mockAttendanceData = [
-  { date: '2024-03-01', clockIn: '09:00 AM', clockOut: '05:00 PM' },
-  { date: '2024-03-02', clockIn: '08:55 AM', clockOut: '05:05 PM' },
-  { date: '2024-03-03', clockIn: '09:02 AM', clockOut: '04:58 PM' },
-]
+interface DashboardProps {
+  user: User;
+  onSignOut: () => Promise<void>;
+}
 
-export default function AttendanceHistory() {
-  const headers = ['Date', 'Clock In', 'Clock Out']
-  const rows = mockAttendanceData.map(record => [
-    record.date,
-    record.clockIn,
-    record.clockOut
-  ])
+interface ManagerInfo {
+  id: string;
+  email: string;
+}
+interface DashboardProps {
+  user: User;
+  onSignOut: () => Promise<void>;
+}
+
+export default function Dashboard({ user, onSignOut }: DashboardProps) {
+  const renderUserInfo = () => {
+    return (
+      <div className="bg-white shadow overflow-hidden sm:rounded-lg mt-6">
+        <div className="px-4 py-5 sm:px-6">
+          <h3 className="text-lg leading-6 font-medium text-gray-900">User Information</h3>
+        </div>
+        <div className="border-t border-gray-200">
+          <dl>
+            <div className="bg-gray-50 px-4 py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+              <dt className="text-sm font-medium text-gray-500">Email</dt>
+              <dd className="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">{user.email}</dd>
+            </div>
+            <div className="bg-white px-4 py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+              <dt className="text-sm font-medium text-gray-500">Role</dt>
+              <dd className="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">{user.role}</dd>
+            </div>
+            {user.department && (
+              <div className="bg-gray-50 px-4 py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+                <dt className="text-sm font-medium text-gray-500">Department</dt>
+                <dd className="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">{user.department}</dd>
+              </div>
+            )}
+            {user.manager && (
+              <div className="bg-white px-4 py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+                <dt className="text-sm font-medium text-gray-500">Manager</dt>
+                <dd className="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">
+                  {typeof user.manager === 'string' ? user.manager : user.manager.email}
+                </dd>
+              </div>
+            )}
+            {user.managerLead && (
+              <div className="bg-gray-50 px-4 py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+                <dt className="text-sm font-medium text-gray-500">Manager Lead</dt>
+                <dd className="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">
+                  {typeof user.managerLead === 'string' ? user.managerLead : user.managerLead.email}
+                </dd>
+              </div>
+            )}
+            {user.salesLead && (
+              <div className="bg-white px-4 py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+                <dt className="text-sm font-medium text-gray-500">Sales Lead</dt>
+                <dd className="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">
+                  {typeof user.salesLead === 'string' ? user.salesLead : user.salesLead.email}
+                </dd>
+              </div>
+            )}
+            {user.ceo && (
+              <div className="bg-gray-50 px-4 py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+                <dt className="text-sm font-medium text-gray-500">CEO</dt>
+                <dd className="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">
+                  {typeof user.ceo === 'string' ? user.ceo : user.ceo.email}
+                </dd>
+              </div>
+            )}
+          </dl>
+        </div>
+      </div>
+    );
+  };
 
   return (
-    <Table headers={headers} rows={rows} />
-  )
+    <div className="min-h-screen bg-gray-100">
+      <nav className="bg-white shadow-sm">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex justify-between h-16">
+            <div className="flex">
+              <div className="flex-shrink-0 flex items-center">
+                <img className="h-8 w-auto" src="/images/logo.png" alt="Your Company" />
+              </div>
+            </div>
+            <div className="flex items-center">
+              <span className="text-gray-700 mr-4">Welcome, {user.email}</span>
+              <Button onClick={onSignOut}>Sign Out</Button>
+            </div>
+          </div>
+        </div>
+      </nav>
+
+      <div className="py-10">
+        <header>
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <h1 className="text-3xl font-bold leading-tight text-gray-900">Dashboard</h1>
+          </div>
+        </header>
+        <main>
+          <div className="max-w-7xl mx-auto sm:px-6 lg:px-8">
+            <div className="px-4 py-8 sm:px-0">
+              {renderUserInfo()}
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+  );
 }
 │   │   │   ├── ScheduleViewer.tsx
 import { Table } from "./ui/table"
@@ -406,12 +537,16 @@ import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 
-export default function SignIn() {
+interface SignInProps {
+  onSignIn: (email: string, password: string) => Promise<void>;
+}
+
+export default function SignIn({ onSignIn }: SignInProps) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
 
-  const handleSignIn = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
 
@@ -421,14 +556,7 @@ export default function SignIn() {
     }
 
     try {
-      const response = await window.ipc.invoke('sign-in', { email, password });
-      if (response.success) {
-        // Navigate to the main app screen or dashboard
-        console.log('Sign in successful');
-        // You can add navigation logic here
-      } else {
-        setError(response.error || 'Invalid credentials');
-      }
+      await onSignIn(email, password);
     } catch (error) {
       setError('An error occurred. Please try again.');
     }
@@ -438,7 +566,7 @@ export default function SignIn() {
     <div className="flex items-center justify-center min-h-screen bg-gray-100">
       <div className="px-8 py-6 mt-4 text-left bg-white shadow-lg">
         <h3 className="text-2xl font-bold text-center">Sign in to your account</h3>
-        <form onSubmit={handleSignIn}>
+        <form onSubmit={handleSubmit}>
           <div className="mt-4">
             <Label htmlFor="email">Email</Label>
             <Input
@@ -534,40 +662,81 @@ export default function TimeOffRequest() {
 │   │   ├── _app.tsx
 import React from 'react'
 import type { AppProps } from 'next/app'
+import { Toaster } from 'sonner'
 
 import '../styles/globals.css'
 
 function MyApp({ Component, pageProps }: AppProps) {
-  return <Component {...pageProps} />
+  return (
+    <>
+      <Component {...pageProps} />
+      <Toaster position="top-center" richColors />
+    </>
+  )
 }
 
 export default MyApp
-
 │   │   ├── home.tsx
 import React, { useState, useEffect } from 'react';
 import SignIn from '../components/SignIn';
+import Dashboard from '../components/Dashboard';
+
+// Define the User interface based on the structure from your Payload CMS
+interface User {
+  id: string;
+  email: string;
+  role: string;
+  department?: string;
+  manager?: string | { id: string; email: string };
+  managerLead?: string | { id: string; email: string };
+  salesLead?: string | { id: string; email: string };
+  ceo?: string | { id: string; email: string };
+}
+
+interface DashboardProps {
+  user: User;
+  onSignOut: () => Promise<void>;
+}
+
+interface ManagerInfo {
+  id: string;
+  email: string;
+}
 
 export default function HomePage() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
 
   useEffect(() => {
     const checkAuth = async () => {
-      const token = await window.ipc.invoke('get-token');
-      setIsAuthenticated(!!token);
+      const result = await window.ipc.invoke('check-auth');
+      setIsAuthenticated(result.isAuthenticated);
+      setUser(result.user);
     };
     checkAuth();
   }, []);
 
+  const handleSignIn = async (email: string, password: string) => {
+    const result = await window.ipc.invoke('sign-in', { email, password });
+    if (result.success) {
+      setIsAuthenticated(true);
+      setUser(result.user);
+    } else {
+      console.error(result.error);
+    }
+  };
+
+  const handleSignOut = async () => {
+    await window.ipc.invoke('logout');
+    setIsAuthenticated(false);
+    setUser(null);
+  };
+
   if (!isAuthenticated) {
-    return <SignIn />;
+    return <SignIn onSignIn={handleSignIn} />;
   }
 
-  return (
-    <div className="container mx-auto px-4 py-8">
-      <h1 className="text-2xl font-bold mb-4">Welcome to PAR Solution Attendance Tracker</h1>
-      <p>You are signed in. Implement your main app content here.</p>
-    </div>
-  );
+  return user ? <Dashboard user={user} onSignOut={handleSignOut} /> : null;
 }
 │   │   ├── next.tsx
 import Image from 'next/image'
@@ -686,8 +855,7 @@ export default function HomePage() {
 │   ├── offlineQueue.ts
 nothing
 │   ├── sync.ts
-nothing
-│
+│nothing
 ├── next-env.d.ts
 ├── next.config.js
 /** @type {import('next').NextConfig} */
@@ -772,7 +940,6 @@ publish: null
 extraMetadata:
   main: app/background.js
 ├── package-lock.json
-
 ├── package.json
 {
   "private": true,
@@ -799,6 +966,7 @@ extraMetadata:
     "electron-serve": "^1.3.0",
     "electron-store": "^8.2.0",
     "lucide-react": "^0.439.0",
+    "sonner": "^1.5.0",
     "tailwind-merge": "^2.5.2"
   },
   "devDependencies": {
@@ -807,7 +975,7 @@ extraMetadata:
     "@types/react": "^18.2.52",
     "@types/react-dom": "^18.3.0",
     "autoprefixer": "^10.4.19",
-    "electron": "^31.0.1",
+    "electron": "^32.0.2",
     "electron-builder": "^24.13.3",
     "next": "^14.2.4",
     "nextron": "^9.1.0",
