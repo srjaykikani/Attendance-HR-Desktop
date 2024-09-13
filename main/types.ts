@@ -1,11 +1,22 @@
 // main/types.ts
+export interface ActivityLog {
+  logIn: number;
+  logOut?: number;
+}
 
-export interface ActivityData {
-    [date: string]: number;
-  }
-  
-  export interface User {
-    id: string;
-    email: string;
-    // Add other user properties as needed
-  }
+export interface DailyActivity {
+  date: string;
+  firstLogin: number;
+  logActivity: ActivityLog[];
+  grossTime: number;
+  effectiveTime: number;
+  idleTime: number;
+}
+
+export interface User {
+  id: string;
+  email: string;
+  name: string;
+}
+
+export type ActivityData = Record<string, DailyActivity>;

@@ -19,38 +19,50 @@ interface DashboardProps {
   onSignOut: () => Promise<void>;
 }
 
-interface ManagerInfo {
-  id: string;
-  email: string;
-}
-
 export default function HomePage() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [user, setUser] = useState<User | null>(null);
 
   useEffect(() => {
     const checkAuth = async () => {
-      const result = await window.ipc.invoke('check-auth');
-      setIsAuthenticated(result.isAuthenticated);
-      setUser(result.user);
+      try {
+        const result = await window.ipc.checkAuth();
+        setIsAuthenticated(result.isAuthenticated);
+        setUser(result.user || null);
+      } catch (error) {
+        console.error('Authentication check failed:', error);
+        setIsAuthenticated(false);
+        setUser(null);
+      }
     };
     checkAuth();
   }, []);
 
   const handleSignIn = async (email: string, password: string) => {
-    const result = await window.ipc.invoke('sign-in', { email, password });
-    if (result.success) {
-      setIsAuthenticated(true);
-      setUser(result.user);
-    } else {
-      console.error(result.error);
+    try {
+      const result = await window.ipc.signIn({ email, password });
+      if (result.success) {
+        setIsAuthenticated(true);
+        setUser(result.user);
+      } else {
+        console.error(result.error);
+        // You might want to show an error message to the user here
+      }
+    } catch (error) {
+      console.error('Sign in failed:', error);
+      // You might want to show an error message to the user here
     }
   };
 
   const handleSignOut = async () => {
-    await window.ipc.invoke('logout');
-    setIsAuthenticated(false);
-    setUser(null);
+    try {
+      await window.ipc.logout();
+      setIsAuthenticated(false);
+      setUser(null);
+    } catch (error) {
+      console.error('Sign out failed:', error);
+      // You might want to show an error message to the user here
+    }
   };
 
   if (!isAuthenticated) {

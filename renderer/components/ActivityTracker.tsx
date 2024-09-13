@@ -1,31 +1,17 @@
+// renderer/components/ActivityTracker.tsx
 import React, { useState, useEffect } from 'react';
 import { Table } from './ui/table';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Clock, ChevronDown } from 'lucide-react';
-
-interface ActivityData {
-  [date: string]: {
-    firstLogin: number;
-    lastLogout: number;
-    grossTime: number;
-    effectiveTime: number;
-    idleTime: number;
-    logs: LogEntry[];
-  };
-}
-
-interface LogEntry {
-  type: 'login' | 'logout';
-  timestamp: number;
-}
+import { ActivityLog, DailyActivity } from '../../main/types';
 
 interface AttendanceRecord {
   date: string;
   grossTime: string;
   effectiveTime: string;
   idleTime: string;
-  logs: LogEntry[];
+  logs: ActivityLog[];
 }
 
 const LoginIcon = () => (
@@ -41,20 +27,32 @@ const LogoutIcon = () => (
 );
 
 interface LogActivityProps {
-  logs: LogEntry[];
+  logs: ActivityLog[];
 }
 
 const LogActivity: React.FC<LogActivityProps> = ({ logs }) => {
-  const sortedLogs = [...logs].sort((a, b) => a.timestamp - b.timestamp);
+  const sortedLogs = [...logs].sort((a, b) => a.logIn - b.logIn);
 
   return (
     <div className="space-y-2">
       {sortedLogs.map((log, index) => (
         <div key={`log-${index}`} className="flex items-center">
-          {log.type === 'login' ? <LoginIcon /> : <LogoutIcon />}
-          <span className="ml-2 text-sm">
-            {log.type === 'login' ? 'Login' : 'Logout'} at {new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true })}
-          </span>
+          {log.logIn && (
+            <>
+              <LoginIcon />
+              <span className="ml-2 text-sm">
+                Login at {new Date(log.logIn).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true })}
+              </span>
+            </>
+          )}
+          {log.logOut && (
+            <>
+              <LogoutIcon />
+              <span className="ml-2 text-sm">
+                Logout at {new Date(log.logOut).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true })}
+              </span>
+            </>
+          )}
         </div>
       ))}
     </div>
@@ -88,17 +86,10 @@ const LogView: React.FC<LogViewProps> = ({ isOpen, onClose, record }) => {
 
 const TodayStats: React.FC = () => {
   const [currentSession, setCurrentSession] = useState({ grossTime: 0, effectiveTime: 0, idleTime: 0 });
-  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [logs, setLogs] = useState<ActivityLog[]>([]);
   const [isLogViewOpen, setIsLogViewOpen] = useState(false);
 
   useEffect(() => {
-    const updateSessionTime = (event: Event) => {
-      const customEvent = event as CustomEvent<{ grossTime: number; effectiveTime: number; idleTime: number }>;
-      setCurrentSession(customEvent.detail);
-    };
-
-    window.addEventListener('update-session-time', updateSessionTime);
-
     const fetchSessionTime = async () => {
       try {
         const sessionTime = await window.ipc.getCurrentSessionTime();
@@ -111,18 +102,15 @@ const TodayStats: React.FC = () => {
     fetchSessionTime();
     const interval = setInterval(fetchSessionTime, 1000);
 
-    return () => {
-      clearInterval(interval);
-      window.removeEventListener('update-session-time', updateSessionTime);
-    };
+    return () => clearInterval(interval);
   }, []);
 
   useEffect(() => {
     const fetchTodayLogs = async () => {
       try {
-        const data: ActivityData = await window.ipc.getActivityData();
+        const data: Record<string, DailyActivity> = await window.ipc.getActivityData();
         const today = new Date().toISOString().split('T')[0];
-        setLogs(data[today]?.logs || []);
+        setLogs(data[today]?.logActivity || []);
       } catch (error) {
         console.error('Error fetching today\'s logs:', error);
       }
@@ -201,13 +189,13 @@ export default function ActivityTracker() {
 
   const fetchAttendanceData = async () => {
     try {
-      const data: ActivityData = await window.ipc.getActivityData();
+      const data: Record<string, DailyActivity> = await window.ipc.getActivityData();
       const formattedData: AttendanceRecord[] = Object.entries(data).map(([date, record]) => ({
         date,
         grossTime: formatDuration(record.grossTime),
         effectiveTime: formatDuration(record.effectiveTime),
         idleTime: formatDuration(record.idleTime),
-        logs: record.logs || [],
+        logs: record.logActivity || [],
       }));
       setAttendanceData(formattedData);
     } catch (error) {
