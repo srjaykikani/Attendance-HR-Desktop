@@ -7,6 +7,7 @@ import axios from 'axios';
 import { SyncManager } from './SyncManager';
 import { encrypt, decrypt } from './encryptionUtils';
 import { ActivityLog, DailyActivity, User, ActivityData } from './types';
+import { initializeRabbitMQ, sendAttendanceUpdate } from './rabbitmq';
 
 const isProd: boolean = process.env.NODE_ENV === 'production';
 
@@ -27,7 +28,10 @@ let lastActivityTime = Date.now();
 let isCurrentlyActive = false;
 let currentSessionStart = 0;
 let todayFirstLogin = 0;
-const idleThreshold = 60000; // 1 minute in milliseconds
+let lastUpdateTime = Date.now();
+let lastIdleStartTime = 0;
+const idleThreshold = 300000; // 5 minutes in milliseconds
+const checkInterval = 5000; // Check every 5 seconds
 
 const PAYLOAD_CMS_URL = process.env.NEXT_PUBLIC_SERVER_URL || 'http://localhost:3000';
 
@@ -57,24 +61,27 @@ const createWindow = async () => {
 
 function setupActivityTracking() {
   const updateActivity = () => {
-    const now = Date.now();
-    const timeSinceLastActivity = now - lastActivityTime;
+    try {
+      const now = Date.now();
+      const idleTimeSeconds = powerMonitor.getSystemIdleTime();
+      const isIdle = idleTimeSeconds * 1000 >= idleThreshold;
 
-    if (timeSinceLastActivity >= idleThreshold) {
-      if (isCurrentlyActive) {
-        logActivity('logout', lastActivityTime);
+      if (isIdle && isCurrentlyActive) {
+        // Transition to idle
+        logActivity('logout', now);
         isCurrentlyActive = false;
-      }
-    } else {
-      if (!isCurrentlyActive) {
+        lastIdleStartTime = now - (idleTimeSeconds * 1000);
+      } else if (!isIdle && !isCurrentlyActive) {
+        // Transition to active
         logActivity('login', now);
         isCurrentlyActive = true;
         currentSessionStart = now;
       }
-    }
 
-    lastActivityTime = now;
-    updateCurrentSessionTime();
+      updateCurrentSessionTime(now, isIdle, idleTimeSeconds);
+    } catch (error) {
+      console.error('Error in updateActivity:', error);
+    }
   };
 
   powerMonitor.on('unlock-screen', updateActivity);
@@ -82,19 +89,12 @@ function setupActivityTracking() {
   powerMonitor.on('resume', updateActivity);
   powerMonitor.on('suspend', updateActivity);
 
+  setInterval(updateActivity, checkInterval);
+
+  // Sync data every 15 minutes
   setInterval(() => {
-    const idleTimeSeconds = powerMonitor.getSystemIdleTime();
-    if (idleTimeSeconds * 1000 < idleThreshold) {
-      updateActivity();
-    } else if (isCurrentlyActive) {
-      updateActivity();
-    }
-    
-    // Sync data every 15 minutes
     SyncManager.batchSync();
   }, 900000);
-
-  setInterval(updateCurrentSessionTime, 5000);
 }
 
 function getActivityData(): ActivityData {
@@ -140,16 +140,36 @@ function logActivity(type: 'login' | 'logout', timestamp: number) {
     isCurrentlyActive = false;
   }
   
-  updateCurrentSessionTime(currentDate, savedData);
   saveActivityData(savedData);
+
+  // Send update to RabbitMQ
+  const user = getUser();
+  if (user) {
+    sendAttendanceUpdate(user.id, { type, timestamp, currentDate, todayData });
+  }
+
+  // Queue activity data for syncing
+  SyncManager.queueActivityData(todayData);
 }
 
-function updateCurrentSessionTime(currentDate?: string, savedData?: ActivityData) {
-  const now = Date.now();
-  const data = savedData || getActivityData();
-  const date = currentDate || new Date().toISOString().split('T')[0];
-  const todayData = data[date] || { 
-    date,
+function getUser(): User | null {
+  const encryptedUser = store.get('user');
+  if (!encryptedUser) return null;
+  
+  try {
+    const decryptedUser = decrypt(encryptedUser);
+    return typeof decryptedUser === 'string' ? JSON.parse(decryptedUser) : decryptedUser;
+  } catch (error) {
+    console.error('Error parsing user data:', error);
+    return null;
+  }
+}
+
+function updateCurrentSessionTime(now: number, isIdle: boolean, idleTimeSeconds: number) {
+  const currentDate = new Date(now).toISOString().split('T')[0];
+  const savedData = getActivityData();
+  const todayData = savedData[currentDate] || { 
+    date: currentDate,
     firstLogin: now,
     logActivity: [],
     grossTime: 0,
@@ -161,17 +181,21 @@ function updateCurrentSessionTime(currentDate?: string, savedData?: ActivityData
     todayFirstLogin = todayData.firstLogin;
   }
 
-  if (isCurrentlyActive) {
-    const sessionDuration = now - currentSessionStart;
-    todayData.effectiveTime += sessionDuration;
-    currentSessionStart = now;
+  const timeSinceLastUpdate = now - lastUpdateTime;
+
+  if (isIdle) {
+    const idleDuration = Math.min(timeSinceLastUpdate, idleTimeSeconds * 1000);
+    todayData.idleTime += idleDuration;
+    todayData.effectiveTime += timeSinceLastUpdate - idleDuration;
+  } else {
+    todayData.effectiveTime += timeSinceLastUpdate;
   }
 
   todayData.grossTime = now - todayFirstLogin;
-  todayData.idleTime = todayData.grossTime - todayData.effectiveTime;
 
-  data[date] = todayData;
-  saveActivityData(data);
+  savedData[currentDate] = todayData;
+  saveActivityData(savedData);
+  lastUpdateTime = now;
 
   if (mainWindow) {
     mainWindow.webContents.send('update-session-time', {
@@ -182,7 +206,8 @@ function updateCurrentSessionTime(currentDate?: string, savedData?: ActivityData
   }
 }
 
-app.on('ready', () => {
+app.on('ready', async () => {
+  await initializeRabbitMQ();
   createWindow();
   setupActivityTracking();
 });
@@ -274,28 +299,36 @@ ipcMain.handle('get-activity-data', () => {
 });
 
 ipcMain.handle('get-current-session-time', () => {
-  const currentDate = new Date().toISOString().split('T')[0];
+  const now = Date.now();
+  const idleTimeSeconds = powerMonitor.getSystemIdleTime();
+  const isIdle = idleTimeSeconds * 1000 >= idleThreshold;
+  updateCurrentSessionTime(now, isIdle, idleTimeSeconds);
+  
+  const currentDate = new Date(now).toISOString().split('T')[0];
   const savedData = getActivityData();
   const todayData = savedData[currentDate] || { 
     date: currentDate,
-    firstLogin: Date.now(),
+    firstLogin: now,
     logActivity: [],
     grossTime: 0,
     effectiveTime: 0,
     idleTime: 0,
   };
 
-  if (isCurrentlyActive) {
-    const now = Date.now();
-    const sessionDuration = now - currentSessionStart;
-    todayData.effectiveTime += sessionDuration;
-    todayData.grossTime = now - todayFirstLogin;
-    todayData.idleTime = todayData.grossTime - todayData.effectiveTime;
-  }
-
   return {
     grossTime: todayData.grossTime,
     effectiveTime: todayData.effectiveTime,
     idleTime: todayData.idleTime
   };
+});
+
+// New IPC handler for manual sync
+ipcMain.handle('manual-sync', async () => {
+  try {
+    await SyncManager.processQueue();
+    return { success: true };
+  } catch (error) {
+    console.error('Manual sync error:', error);
+    return { success: false, error: 'An error occurred during manual sync' };
+  }
 });
