@@ -1,7 +1,9 @@
-import React from 'react';
+// renderer/components/Dashboard.tsx
+import React, { useState, useEffect } from 'react';
 import { Button } from "./ui/button";
 import ActivityTracker from './ActivityTracker';
-// Define the User interface based on the structure from your Payload CMS
+import CommentBox from './CommentBox';
+
 interface User {
   id: string;
   email: string;
@@ -11,23 +13,21 @@ interface User {
   managerLead?: string | { id: string; email: string };
   salesLead?: string | { id: string; email: string };
   ceo?: string | { id: string; email: string };
+  comment?: string;
 }
 
-interface DashboardProps {
-  user: User;
-  onSignOut: () => Promise<void>;
-}
-
-interface ManagerInfo {
-  id: string;
-  email: string;
-}
 interface DashboardProps {
   user: User;
   onSignOut: () => Promise<void>;
 }
 
 export default function Dashboard({ user, onSignOut }: DashboardProps) {
+  const [comment, setComment] = useState(user.comment || '');
+
+  useEffect(() => {
+    setComment(user.comment || '');
+  }, [user.comment]);
+
   const renderUserInfo = () => {
     return (
       <div className="bg-white shadow overflow-hidden sm:rounded-lg mt-6">
@@ -117,8 +117,12 @@ export default function Dashboard({ user, onSignOut }: DashboardProps) {
             <div className="px-4 py-8 sm:px-0">
               {renderUserInfo()}
               <div className="mt-8">
-              <ActivityTracker />
-            </div>
+                <ActivityTracker />
+              </div>
+              <div className="mt-8">
+                <h2 className="text-2xl font-bold mb-4">User Comments</h2>
+                <CommentBox userId={user.id} initialComment={comment} />
+              </div>
             </div>
           </div>
         </main>

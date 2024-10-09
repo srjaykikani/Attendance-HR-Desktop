@@ -33,7 +33,7 @@ let lastIdleStartTime = 0;
 const idleThreshold = 300000; // 5 minutes in milliseconds
 const checkInterval = 5000; // Check every 5 seconds
 
-const PAYLOAD_CMS_URL = process.env.NEXT_PUBLIC_SERVER_URL || 'http://localhost:3000';
+const PAYLOAD_CMS_URL = 'http://localhost:3000';
 
 const createWindow = async () => {
   mainWindow = new BrowserWindow({
@@ -207,7 +207,12 @@ function updateCurrentSessionTime(now: number, isIdle: boolean, idleTimeSeconds:
 }
 
 app.on('ready', async () => {
-  await initializeRabbitMQ();
+  try {
+    await initializeRabbitMQ();
+  } catch (error) {
+    console.error('Failed to initialize RabbitMQ:', error);
+    // Handle the error, maybe set a flag to indicate RabbitMQ is not available
+  }
   createWindow();
   setupActivityTracking();
 });
@@ -248,6 +253,76 @@ ipcMain.handle('sign-in', async (_, { email, password }) => {
       };
     }
     return { success: false, error: 'An error occurred during sign-in' };
+  }
+});
+
+ipcMain.handle('update-user-comment', async (_, { userId, comment }) => {
+  try {
+    const token = store.get('auth-token');
+    if (!token) {
+      throw new Error('No authentication token found');
+    }
+
+    const url = `${PAYLOAD_CMS_URL}/api/users/${userId}`;
+    
+    const response = await axios.patch(
+      url,
+      { comment },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `JWT ${token}`,
+        },
+      }
+    );
+
+    if (response.status === 200) {
+      return { success: true, data: response.data };
+    } else {
+      throw new Error('Failed to update comment');
+    }
+  } catch (error) {
+    console.error('Error updating user comment:', error);
+    if (axios.isAxiosError(error) && error.response) {
+      return { 
+        success: false, 
+        error: error.response.data?.errors?.[0]?.message || 'An error occurred while updating the comment',
+        status: error.response.status
+      };
+    }
+    return { 
+      success: false, 
+      error: error instanceof Error ? error.message : 'An error occurred while updating the comment'
+    };
+  }
+});
+
+ipcMain.handle('fetch-user-info', async (_, userId) => {
+  try {
+    const token = store.get('auth-token');
+    if (!token) {
+      throw new Error('No authentication token found');
+    }
+
+    const url = `${PAYLOAD_CMS_URL}/api/users/${userId}`;
+    
+    const response = await axios.get(url, {
+      headers: {
+        Authorization: `JWT ${token}`,
+      },
+    });
+
+    if (response.status === 200) {
+      return { success: true, user: response.data };
+    } else {
+      throw new Error('Failed to fetch user info');
+    }
+  } catch (error) {
+    console.error('Error fetching user info:', error);
+    return { 
+      success: false, 
+      error: error instanceof Error ? error.message : 'An error occurred while fetching user info'
+    };
   }
 });
 
@@ -322,7 +397,6 @@ ipcMain.handle('get-current-session-time', () => {
   };
 });
 
-// New IPC handler for manual sync
 ipcMain.handle('manual-sync', async () => {
   try {
     await SyncManager.processQueue();

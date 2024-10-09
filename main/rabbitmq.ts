@@ -14,6 +14,7 @@ export async function initializeRabbitMQ() {
     console.log('RabbitMQ connection established');
   } catch (error) {
     console.error('Failed to connect to RabbitMQ:', error);
+    throw error; // Rethrow the error to be handled in the main process
   }
 }
 
