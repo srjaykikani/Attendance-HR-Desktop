@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('electron', {
 
 contextBridge.exposeInMainWorld('ipc', {
   invoke: (channel: string, data: any) => ipcRenderer.invoke(channel, data),
+  logActivity: (data: { userId: string; type: 'login' | 'logout'; timestamp: number }) =>ipcRenderer.invoke('log-activity', data),
   getActivityData: () => ipcRenderer.invoke('get-activity-data'),
   getCurrentSessionTime: () => ipcRenderer.invoke('get-current-session-time'),
   checkAuth: () => ipcRenderer.invoke('check-auth'),

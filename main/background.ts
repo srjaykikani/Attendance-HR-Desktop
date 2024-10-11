@@ -7,7 +7,6 @@ import axios from 'axios';
 import { SyncManager } from './SyncManager';
 import { encrypt, decrypt } from './encryptionUtils';
 import { ActivityLog, DailyActivity, User, ActivityData } from './types';
-import { initializeRabbitMQ, sendAttendanceUpdate } from './rabbitmq';
 
 const isProd: boolean = process.env.NODE_ENV === 'production';
 
@@ -110,7 +109,7 @@ function saveActivityData(data: ActivityData) {
 function logActivity(type: 'login' | 'logout', timestamp: number) {
   const currentDate = new Date(timestamp).toISOString().split('T')[0];
   const savedData = getActivityData();
-  
+
   if (!savedData[currentDate]) {
     savedData[currentDate] = {
       date: currentDate,
@@ -121,9 +120,9 @@ function logActivity(type: 'login' | 'logout', timestamp: number) {
       idleTime: 0,
     };
   }
-  
+
   const todayData = savedData[currentDate];
-  
+
   if (type === 'login') {
     todayData.logActivity.push({ logIn: timestamp });
     if (todayData.firstLogin === 0 || timestamp < todayData.firstLogin) {
@@ -139,18 +138,25 @@ function logActivity(type: 'login' | 'logout', timestamp: number) {
     }
     isCurrentlyActive = false;
   }
-  
+
   saveActivityData(savedData);
 
-  // Send update to RabbitMQ
+  // Send log activity to Payload CMS using the IPC handler
   const user = getUser();
   if (user) {
-    sendAttendanceUpdate(user.id, { type, timestamp, currentDate, todayData });
+    window.electron.ipcRenderer.invoke('log-activity', {
+      userId: user.id,
+      type,
+      timestamp,
+    }).catch(error => {
+      console.error('Failed to send activity log to Payload CMS:', error);
+    });
   }
 
   // Queue activity data for syncing
   SyncManager.queueActivityData(todayData);
 }
+
 
 function getUser(): User | null {
   const encryptedUser = store.get('user');
@@ -207,12 +213,6 @@ function updateCurrentSessionTime(now: number, isIdle: boolean, idleTimeSeconds:
 }
 
 app.on('ready', async () => {
-  try {
-    await initializeRabbitMQ();
-  } catch (error) {
-    console.error('Failed to initialize RabbitMQ:', error);
-    // Handle the error, maybe set a flag to indicate RabbitMQ is not available
-  }
   createWindow();
   setupActivityTracking();
 });
@@ -255,6 +255,145 @@ ipcMain.handle('sign-in', async (_, { email, password }) => {
     return { success: false, error: 'An error occurred during sign-in' };
   }
 });
+
+// Add this to your existing IPC handlers in background.ts
+
+ipcMain.handle('log-activity', async (_, { userId, type, timestamp, duration }) => {
+  try {
+    const token = store.get('auth-token');
+    if (!token) {
+      throw new Error('No authentication token found');
+    }
+
+    const currentDate = new Date(timestamp).toISOString().split('T')[0];
+    
+    // First, fetch the existing activity log for the day
+    const response = await axios.get(
+      `${PAYLOAD_CMS_URL}/api/activity-logs`,
+      {
+        params: {
+          where: {
+            and: [
+              {
+                user: {
+                  equals: userId
+                }
+              },
+              {
+                date: {
+                  equals: currentDate
+                }
+              }
+            ]
+          }
+        },
+        headers: {
+          Authorization: `JWT ${token}`,
+        },
+      }
+    );
+
+    let activityLogId;
+    let existingEntries = [];
+
+    if (response.data.docs.length > 0) {
+      // Update existing log
+      activityLogId = response.data.docs[0].id;
+      existingEntries = response.data.docs[0].activityEntries || [];
+    }
+
+    const newEntry = {
+      time: new Date(timestamp).toISOString(),
+      duration: duration
+    };
+
+    const updatedEntries = [...existingEntries, newEntry];
+
+    // Calculate total times
+    let grossTime = 0;
+    let effectiveTime = 0;
+    updatedEntries.forEach(entry => {
+      if (entry.duration) {
+        grossTime += entry.duration;
+        effectiveTime += entry.duration;
+      }
+    });
+
+    const timeData = {
+      date: currentDate,
+      user: userId,
+      activityEntries: updatedEntries,
+      grossTime: grossTime,
+      effectiveTime: effectiveTime,
+      idleTime: 0 // Manual entries don't count as idle time
+    };
+
+    let finalResponse;
+    if (activityLogId) {
+      // Update existing log
+      finalResponse = await axios.patch(
+        `${PAYLOAD_CMS_URL}/api/activity-logs/${activityLogId}`,
+        timeData,
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `JWT ${token}`,
+          },
+        }
+      );
+    } else {
+      // Create new log
+      finalResponse = await axios.post(
+        `${PAYLOAD_CMS_URL}/api/activity-logs`,
+        timeData,
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `JWT ${token}`,
+          },
+        }
+      );
+    }
+
+    if (finalResponse.status === 200 || finalResponse.status === 201) {
+      // Update local storage
+      const savedData = getActivityData();
+      if (!savedData[currentDate]) {
+        savedData[currentDate] = {
+          date: currentDate,
+          firstLogin: timestamp,
+          logActivity: [],
+          grossTime: 0,
+          effectiveTime: 0,
+          idleTime: 0,
+        };
+      }
+      
+      savedData[currentDate].grossTime += duration;
+      savedData[currentDate].effectiveTime += duration;
+      saveActivityData(savedData);
+
+      return { success: true };
+    } else {
+      throw new Error(`Failed to log activity with status: ${finalResponse.status}`);
+    }
+  } catch (error) {
+    console.error('Error logging manual time:', error);
+    if (axios.isAxiosError(error) && error.response) {
+      return {
+        success: false,
+        error: error.response.data?.errors?.[0]?.message || 'An error occurred while logging the activity',
+        status: error.response.status
+      };
+    }
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'An error occurred while logging the activity'
+    };
+  }
+});
+
+
 
 ipcMain.handle('update-user-comment', async (_, { userId, comment }) => {
   try {

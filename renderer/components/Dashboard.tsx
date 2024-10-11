@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { Button } from "./ui/button";
 import ActivityTracker from './ActivityTracker';
+import TimeEntry from './TimeEntry';
 import CommentBox from './CommentBox';
 
 interface User {
@@ -119,6 +120,10 @@ export default function Dashboard({ user, onSignOut }: DashboardProps) {
               <div className="mt-8">
                 <ActivityTracker />
               </div>
+              <div className="mt-8">
+  <h2 className="text-2xl font-bold mb-4">Manual Time Entry</h2>
+  <TimeEntry userId={user.id} />
+</div>
               <div className="mt-8">
                 <h2 className="text-2xl font-bold mb-4">User Comments</h2>
                 <CommentBox userId={user.id} initialComment={comment} />
