@@ -29,9 +29,12 @@ export const uploadToS3 = async (buffer: Buffer, key: string, mimetype: string) 
 export const uploadScreenshot = async (buffer: Buffer, userEmail: string): Promise<string> => {
   try {
     const timestamp = new Date().toISOString();
-    const yearMonth = timestamp.substring(0, 7);
+    const yearMonth = timestamp.substring(0, 7);  // Gets "2024-01"
+    const day = timestamp.substring(8, 10);       // Gets the day "21"
     const filename = `${timestamp.replace(/[:.]/g, '-')}.png`;
-    const key = `screenshots/${userEmail}/${yearMonth}/${filename}`;
+    
+    // New folder structure including day
+    const key = `screenshots/${userEmail}/${yearMonth}/${day}/${filename}`;
 
     await s3Client.send(new PutObjectCommand({
       Bucket: 'keka',
