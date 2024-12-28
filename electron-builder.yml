@@ -12,3 +12,6 @@ files:
 publish: null
 extraMetadata:
   main: app/background.js
+externals:
+  - '@aws-sdk/client-s3'
+  - '@aws-sdk/lib-storage'

@@ -1,5 +1,5 @@
 // main/background.ts
-import { app, ipcMain, BrowserWindow, powerMonitor } from 'electron';
+import { app, ipcMain, BrowserWindow, powerMonitor, desktopCapturer } from 'electron';
 import serve from 'electron-serve';
 import Store from 'electron-store';
 import path from 'path';
@@ -7,6 +7,8 @@ import axios from 'axios';
 import { SyncManager } from './SyncManager';
 import { encrypt, decrypt } from './encryptionUtils';
 import { ActivityLog, DailyActivity, User, ActivityData } from './types';
+import { ScreenshotManager } from './ScreenshotManager';
+import { uploadScreenshot } from './utils/s3Upload';
 
 const isProd: boolean = process.env.NODE_ENV === 'production';
 
@@ -33,6 +35,8 @@ const idleThreshold = 300000; // 5 minutes in milliseconds
 const checkInterval = 5000; // Check every 5 seconds
 
 const PAYLOAD_CMS_URL = 'http://localhost:3000';
+
+let screenshotManager: ScreenshotManager | null = null;
 
 const createWindow = async () => {
   mainWindow = new BrowserWindow({
@@ -141,16 +145,28 @@ function logActivity(type: 'login' | 'logout', timestamp: number) {
 
   saveActivityData(savedData);
 
-  // Send log activity to Payload CMS using the IPC handler
+  // Replace window.electron.ipcRenderer with direct API call
   const user = getUser();
-  if (user) {
-    window.electron.ipcRenderer.invoke('log-activity', {
-      userId: user.id,
-      type,
-      timestamp,
-    }).catch(error => {
-      console.error('Failed to send activity log to Payload CMS:', error);
-    });
+  if (user && mainWindow) {
+    // Use direct axios call instead of IPC
+    const token = store.get('auth-token');
+    if (token) {
+      axios.post(
+        `${PAYLOAD_CMS_URL}/api/activity-logs`,
+        {
+          userId: user.id,
+          type,
+          timestamp,
+        },
+        {
+          headers: {
+            Authorization: `JWT ${token}`,
+          },
+        }
+      ).catch(error => {
+        console.error('Failed to send activity log to Payload CMS:', error);
+      });
+    }
   }
 
   // Queue activity data for syncing
@@ -240,6 +256,16 @@ ipcMain.handle('sign-in', async (_, { email, password }) => {
     if (response.data && response.data.user) {
       await store.set('auth-token', response.data.token);
       await store.set('user', encrypt(response.data.user));
+      
+      // Start screenshot capture automatically after login
+      try {
+        screenshotManager = new ScreenshotManager(response.data.user.email);
+        await screenshotManager.start();
+        console.log('Screenshot capture started automatically after login');
+      } catch (error) {
+        console.error('Failed to start automatic screenshot capture:', error);
+      }
+      
       return { success: true, user: response.data.user };
     } else {
       throw new Error('Invalid response from server');
@@ -475,6 +501,10 @@ ipcMain.handle('get-user', () => {
 });
 
 ipcMain.handle('logout', () => {
+  if (screenshotManager) {
+    screenshotManager.stop();
+    screenshotManager = null;
+  }
   store.delete('auth-token');
   store.delete('user');
   return { success: true };
@@ -543,5 +573,89 @@ ipcMain.handle('manual-sync', async () => {
   } catch (error) {
     console.error('Manual sync error:', error);
     return { success: false, error: 'An error occurred during manual sync' };
+  }
+});
+
+ipcMain.handle('start-screenshot-capture', async () => {
+  try {
+    const user = getUser();
+    if (!user?.email) {
+      console.error('No user email found for screenshot capture');
+      return { success: false, error: 'User not authenticated' };
+    }
+
+    console.log('Starting screenshot capture for user:', user.email);
+    
+    if (screenshotManager?.isActive()) {
+      console.log('Screenshot capture already active');
+      return { success: true };
+    }
+
+    screenshotManager = new ScreenshotManager(user.email);
+    await screenshotManager.start();
+    console.log('Screenshot capture started successfully');
+    
+    return { success: true };
+  } catch (error) {
+    console.error('Failed to start screenshot capture:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('stop-screenshot-capture', () => {
+  if (screenshotManager) {
+    screenshotManager.stop();
+    screenshotManager = null;
+  }
+  return { success: true };
+});
+
+ipcMain.handle('get-screenshot-status', () => {
+  const isActive = screenshotManager?.isActive() || false;
+  console.log('Current screenshot capture status:', isActive);
+  return { isCapturing: isActive };
+});
+
+// Add this with your other IPC handlers
+ipcMain.handle('test-screenshot', async () => {
+  try {
+    console.log('Testing screenshot capture...');
+    const sources = await desktopCapturer.getSources({
+      types: ['screen'],
+      thumbnailSize: { width: 800, height: 600 }
+    });
+    
+    console.log('Available sources:', sources.length);
+    if (sources.length === 0) {
+      throw new Error('No screen sources found');
+    }
+
+    const testUser = getUser();
+    if (!testUser?.email) {
+      throw new Error('No user email found for test');
+    }
+
+    const testBuffer = sources[0].thumbnail.toPNG();
+    console.log('Screenshot captured, size:', testBuffer.length, 'bytes');
+    
+    console.log('Attempting test upload for:', testUser.email);
+    const url = await uploadScreenshot(testBuffer, testUser.email);
+    console.log('Test upload successful:', url);
+    
+    return {
+      success: true,
+      sources: sources.map(s => ({
+        name: s.name,
+        id: s.id,
+        display_id: s.display_id
+      })),
+      url
+    };
+  } catch (error) {
+    console.error('Test screenshot failed:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error during screenshot test'
+    };
   }
 });

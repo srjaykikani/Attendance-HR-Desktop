@@ -24,10 +24,76 @@ interface DashboardProps {
 
 export default function Dashboard({ user, onSignOut }: DashboardProps) {
   const [comment, setComment] = useState(user.comment || '');
+  const [isCapturing, setIsCapturing] = useState(true); // Set default to true
 
   useEffect(() => {
     setComment(user.comment || '');
   }, [user.comment]);
+
+  useEffect(() => {
+    // Check screenshot capture status and start if not already running
+    const checkAndStartCapture = async () => {
+      try {
+        const status = await window.screenshot.getCaptureStatus();
+        if (!status.isCapturing) {
+          console.log('Starting screenshot capture automatically...');
+          const result = await window.screenshot.startCapture();
+          if (result.success) {
+            setIsCapturing(true);
+          } else {
+            console.error('Failed to start capture:', result.error);
+          }
+        }
+        setIsCapturing(status.isCapturing);
+      } catch (error) {
+        console.error('Error checking/starting capture:', error);
+      }
+    };
+
+    checkAndStartCapture();
+  }, []);
+
+  const handleScreenshotToggle = async () => {
+    try {
+      console.log('Toggling screenshot capture...');
+      if (isCapturing) {
+        await window.screenshot.stopCapture();
+        setIsCapturing(false);
+        console.log('Screenshot capture stopped');
+      } else {
+        console.log('Starting screenshot capture...');
+        const result = await window.screenshot.startCapture();
+        if (result.success) {
+          setIsCapturing(true);
+          console.log('Screenshot capture started');
+        } else {
+          console.error('Failed to start capture:', result.error);
+          // Add error notification here if you have a notification system
+        }
+      }
+    } catch (error) {
+      console.error('Screenshot toggle failed:', error);
+      // Add error notification here if you have a notification system
+    }
+  };
+
+  const handleTestScreenshot = async () => {
+    try {
+      console.log('Testing screenshot capture...');
+      const result = await window.electron.ipcRenderer.invoke('test-screenshot');
+      
+      if (result.success) {
+        console.log('Screenshot test successful:', result);
+        alert(`Screenshot captured and uploaded successfully!\nURL: ${result.url}`);
+      } else {
+        console.error('Screenshot test failed:', result.error);
+        alert(`Screenshot test failed: ${result.error}`);
+      }
+    } catch (error) {
+      console.error('Screenshot test failed:', error);
+      alert('Screenshot test failed. Check console for details.');
+    }
+  };
 
   const renderUserInfo = () => {
     return (
@@ -116,14 +182,42 @@ export default function Dashboard({ user, onSignOut }: DashboardProps) {
         <main>
           <div className="max-w-7xl mx-auto sm:px-6 lg:px-8">
             <div className="px-4 py-8 sm:px-0">
+              {/* Add this new section before or after ActivityTracker */}
+              <div className="bg-white shadow overflow-hidden sm:rounded-lg mb-6">
+                <div className="px-4 py-5 sm:px-6">
+                  <h3 className="text-lg leading-6 font-medium text-gray-900">
+                    Screenshot Capture
+                  </h3>
+                  <p className="mt-1 text-sm text-gray-500">
+                    {isCapturing 
+                      ? 'Screenshots are being captured every 5 minutes' 
+                      : 'Start capturing screenshots'}
+                  </p>
+                  <div className="mt-4 space-x-4 flex items-center">
+                    <Button
+                      onClick={handleScreenshotToggle}
+                      variant={isCapturing ? "destructive" : "default"}
+                    >
+                      {isCapturing ? 'Stop Capture' : 'Start Capture'}
+                    </Button>
+                    <Button
+                      onClick={handleTestScreenshot}
+                      variant="outline"
+                    >
+                      Test Screenshot
+                    </Button>
+                  </div>
+                </div>
+              </div>
+
               {renderUserInfo()}
               <div className="mt-8">
                 <ActivityTracker />
               </div>
               <div className="mt-8">
-  <h2 className="text-2xl font-bold mb-4">Manual Time Entry</h2>
-  <TimeEntry userId={user.id} />
-</div>
+                <h2 className="text-2xl font-bold mb-4">Manual Time Entry</h2>
+                <TimeEntry userId={user.id} />
+              </div>
               <div className="mt-8">
                 <h2 className="text-2xl font-bold mb-4">User Comments</h2>
                 <CommentBox userId={user.id} initialComment={comment} />

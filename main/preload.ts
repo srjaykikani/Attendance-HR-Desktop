@@ -21,6 +21,12 @@ contextBridge.exposeInMainWorld('ipc', {
   updateUserComment: (data: { userId: string; comment: string }) => ipcRenderer.invoke('update-user-comment', data),
 });
 
+contextBridge.exposeInMainWorld('screenshot', {
+  startCapture: () => ipcRenderer.invoke('start-screenshot-capture'),
+  stopCapture: () => ipcRenderer.invoke('stop-screenshot-capture'),
+  getCaptureStatus: () => ipcRenderer.invoke('get-screenshot-status'),
+});
+
 declare global {
   interface Window {
     electron: {
@@ -38,6 +44,11 @@ declare global {
       logout: () => Promise<{ success: boolean }>;
       fetchUserInfo: (userId: string) => Promise<{ success: boolean; user?: User; error?: string }>;
       updateUserComment: (data: { userId: string; comment: string }) => Promise<{ success: boolean; error?: string }>;
+    };
+    screenshot: {
+      startCapture: () => Promise<{ success: boolean; error?: string }>;
+      stopCapture: () => Promise<{ success: boolean }>;
+      getCaptureStatus: () => Promise<{ isCapturing: boolean }>;
     };
   }
 }
